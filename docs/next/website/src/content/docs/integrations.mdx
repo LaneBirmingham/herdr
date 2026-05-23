@@ -1,6 +1,6 @@
 ---
 title: Integrations
-description: Install Herdr integrations for Pi, Claude Code, Codex, OpenCode, and Hermes Agent.
+description: Install Herdr integrations for Pi, Claude Code, Codex, OpenCode, Hermes Agent, and GitHub Copilot CLI.
 ---
 
 Herdr detects supported agents automatically. Integrations make that detection more precise by reporting semantic state directly to Herdr.
@@ -17,6 +17,7 @@ herdr integration install claude
 herdr integration install codex
 herdr integration install opencode
 herdr integration install hermes
+herdr integration install copilot
 ```
 
 ## Uninstall integrations
@@ -27,6 +28,7 @@ herdr integration uninstall claude
 herdr integration uninstall codex
 herdr integration uninstall opencode
 herdr integration uninstall hermes
+herdr integration uninstall copilot
 ```
 
 ## How Herdr uses integrations
@@ -104,6 +106,18 @@ herdr integration install hermes
 Herdr writes `~/.hermes/plugins/herdr-agent-state/` and enables `herdr-agent-state` in `~/.hermes/config.yaml`. The Hermes config directory must already exist. Restart Hermes after installing so the plugin loads. Uninstall removes the plugin directory and removes `herdr-agent-state` from `plugins.enabled`.
 
 The plugin reports lifecycle, tool, and approval state while Hermes runs inside a Herdr pane. Native screen heuristics remain available when the plugin is not installed.
+
+## GitHub Copilot CLI
+
+Install the GitHub Copilot CLI hook:
+
+```bash
+herdr integration install copilot
+```
+
+The hook reports agent state to the local Herdr socket when GitHub Copilot CLI exposes hook events.
+
+Herdr uses `~/.copilot` by default, or `COPILOT_HOME` when set. The Copilot config directory must already exist. Install writes `hooks/herdr-agent-state.sh` (executable) and `hooks/herdr-agent-state.json` containing the hook configuration. Uninstall deletes both of these files.
 
 ## Custom status labels
 

@@ -398,6 +398,7 @@ pub enum IntegrationTarget {
     Codex,
     Opencode,
     Hermes,
+    Copilot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

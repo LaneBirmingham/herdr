@@ -191,7 +191,7 @@ for agents outside the built-in list, herdr still works as a terminal multiplexe
 
 ### direct integrations
 
-the built-in pi, claude code, codex, opencode, and hermes integrations forward semantic state to herdr over the socket api. install with:
+the built-in pi, claude code, codex, opencode, hermes, and github copilot integrations forward semantic state to herdr over the socket api. install with:
 
 ```bash
 herdr integration install pi
@@ -199,6 +199,7 @@ herdr integration install claude
 herdr integration install codex
 herdr integration install opencode
 herdr integration install hermes
+herdr integration install copilot
 ```
 
 see the [integrations docs](https://herdr.dev/docs/integrations/) for setup details.

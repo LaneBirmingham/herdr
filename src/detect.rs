@@ -734,8 +734,17 @@ fn has_visible_blocker(agent: Agent, content: &str, state: AgentState) -> bool {
         // is known to be structural and live.
         Agent::Claude => has_claude_visible_blocker(content),
         Agent::Codex => has_codex_visible_blocker(content),
+        Agent::GithubCopilot => has_copilot_visible_blocker(content),
         _ => false,
     }
+}
+
+fn has_copilot_visible_blocker(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    lower.contains("esc to cancel")
+        && (lower.contains("enter to select")
+            || lower.contains("enter to confirm")
+            || lower.contains("enter to submit"))
 }
 
 fn has_claude_visible_blocker(content: &str) -> bool {
@@ -777,8 +786,19 @@ fn has_visible_working(agent: Agent, content: &str, state: AgentState) -> bool {
     match agent {
         Agent::Claude => has_claude_working_chrome(content),
         Agent::Codex => has_codex_visible_working(content),
+        Agent::GithubCopilot => has_copilot_visible_working(content),
         _ => false,
     }
+}
+
+fn has_copilot_visible_working(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    (lower.contains("esc to cancel")
+        || lower.contains("esc cancel")
+        || lower.contains("esc again to cancel"))
+        && !(lower.contains("enter to select")
+            || lower.contains("enter to confirm")
+            || lower.contains("enter to submit"))
 }
 
 fn has_codex_visible_working(content: &str) -> bool {
@@ -1702,6 +1722,24 @@ mod tests {
 
         assert_eq!(detection.state, AgentState::Blocked);
         assert!(!detection.visible_blocker);
+    }
+
+    #[test]
+    fn copilot_question_ui_is_visible_blocker() {
+        let screen = "○ Asking user Requesting permission to access directory 'src/'\n↑/↓ to select · enter to confirm · esc to cancel";
+        let detection = detect_agent(Some(Agent::GithubCopilot), screen);
+
+        assert_eq!(detection.state, AgentState::Blocked);
+        assert!(detection.visible_blocker);
+    }
+
+    #[test]
+    fn copilot_visible_working_override() {
+        let screen = "○ Thinking... · esc to cancel";
+        let detection = detect_agent(Some(Agent::GithubCopilot), screen);
+
+        assert_eq!(detection.state, AgentState::Working);
+        assert!(detection.visible_working);
     }
 
     #[test]

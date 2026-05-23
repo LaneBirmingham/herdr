@@ -31,6 +31,11 @@ const HERMES_PLUGIN_INIT_INSTALL_NAME: &str = "__init__.py";
 const HERMES_PLUGIN_MANIFEST_ASSET: &str = include_str!("assets/hermes/plugin.yaml");
 const HERMES_PLUGIN_INIT_ASSET: &str = include_str!("assets/hermes/__init__.py");
 const HERMES_INTEGRATION_VERSION: u32 = 1;
+const COPILOT_HOOK_INSTALL_NAME: &str = "herdr-agent-state.sh";
+const COPILOT_HOOK_ASSET: &str = include_str!("assets/copilot/herdr-agent-state.sh");
+const COPILOT_JSON_INSTALL_NAME: &str = "herdr-agent-state.json";
+const COPILOT_INTEGRATION_VERSION: u32 = 1;
+const COPILOT_HOME_ENV_VAR: &str = "COPILOT_HOME";
 const INTEGRATION_VERSION_MARKER: &str = "HERDR_INTEGRATION_VERSION=";
 
 #[derive(Debug)]
@@ -55,6 +60,12 @@ pub(crate) struct OpenCodeInstallPaths {
 pub(crate) struct HermesInstallPaths {
     pub plugin_dir: PathBuf,
     pub config_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct CopilotInstallPaths {
+    pub hook_path: PathBuf,
+    pub json_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +147,14 @@ pub(crate) struct HermesUninstallResult {
     pub updated_config: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct CopilotUninstallResult {
+    pub hook_path: PathBuf,
+    pub json_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub removed_json_file: bool,
+}
+
 pub(crate) fn apply_pane_env(cmd: &mut CommandBuilder, pane_id: PaneId) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
     cmd.env(HERDR_PANE_ID_ENV_VAR, format!("p_{}", pane_id.raw()));
@@ -193,6 +212,19 @@ pub(crate) fn install_target(
                 format!(
                     "enabled hermes plugin in {}",
                     installed.config_path.display()
+                ),
+            ]
+        }
+        crate::api::schema::IntegrationTarget::Copilot => {
+            let installed = install_copilot()?;
+            vec![
+                format!(
+                    "installed copilot integration hook to {}",
+                    installed.hook_path.display()
+                ),
+                format!(
+                    "installed copilot integration config to {}",
+                    installed.json_path.display()
                 ),
             ]
         }
@@ -319,6 +351,33 @@ pub(crate) fn uninstall_target(
             }
             messages
         }
+        crate::api::schema::IntegrationTarget::Copilot => {
+            let result = uninstall_copilot()?;
+            let mut messages = Vec::new();
+            if result.removed_hook_file {
+                messages.push(format!(
+                    "removed copilot hook at {}",
+                    result.hook_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no copilot hook found at {}",
+                    result.hook_path.display()
+                ));
+            }
+            if result.removed_json_file {
+                messages.push(format!(
+                    "removed copilot config at {}",
+                    result.json_path.display()
+                ));
+            } else {
+                messages.push(format!(
+                    "no copilot config found at {}",
+                    result.json_path.display()
+                ));
+            }
+            messages
+        }
     };
 
     crate::logging::integration_action("uninstall", integration_target_label(target), "ok");
@@ -334,6 +393,7 @@ pub(crate) fn integration_target_label(
         crate::api::schema::IntegrationTarget::Codex => "codex",
         crate::api::schema::IntegrationTarget::Opencode => "opencode",
         crate::api::schema::IntegrationTarget::Hermes => "hermes",
+        crate::api::schema::IntegrationTarget::Copilot => "copilot",
     }
 }
 
@@ -344,6 +404,7 @@ fn integration_target_command(target: crate::api::schema::IntegrationTarget) -> 
         crate::api::schema::IntegrationTarget::Codex => "codex",
         crate::api::schema::IntegrationTarget::Opencode => "opencode",
         crate::api::schema::IntegrationTarget::Hermes => "hermes",
+        crate::api::schema::IntegrationTarget::Copilot => "copilot",
     }
 }
 
@@ -417,7 +478,7 @@ fn integration_specs() -> [(
     crate::api::schema::IntegrationTarget,
     io::Result<PathBuf>,
     u32,
-); 5] {
+); 6] {
     [
         (
             crate::api::schema::IntegrationTarget::Pi,
@@ -443,6 +504,11 @@ fn integration_specs() -> [(
             crate::api::schema::IntegrationTarget::Hermes,
             hermes_plugin_dir().map(|dir| dir.join(HERMES_PLUGIN_INIT_INSTALL_NAME)),
             HERMES_INTEGRATION_VERSION,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Copilot,
+            copilot_dir().map(|dir| dir.join("hooks").join(COPILOT_HOOK_INSTALL_NAME)),
+            COPILOT_INTEGRATION_VERSION,
         ),
     ]
 }
@@ -780,6 +846,74 @@ pub(crate) fn install_hermes() -> io::Result<HermesInstallPaths> {
     })
 }
 
+pub(crate) fn install_copilot() -> io::Result<CopilotInstallPaths> {
+    let dir = copilot_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "copilot directory not found at {}. install copilot cli first",
+            dir.display()
+        )));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let hook_path = hooks_dir.join(COPILOT_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, COPILOT_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    let json_path = hooks_dir.join(COPILOT_JSON_INSTALL_NAME);
+    let quoted_hook_path = shell_single_quote(&hook_path.display().to_string());
+    let config = json!({
+        "version": 1,
+        "hooks": {
+            "userPromptSubmitted": [
+                {
+                    "type": "command",
+                    "bash": format!("bash {quoted_hook_path} working")
+                }
+            ],
+            "preToolUse": [
+                {
+                    "type": "command",
+                    "bash": format!("bash {quoted_hook_path} pre_tool_use")
+                }
+            ],
+            "postToolUse": [
+                {
+                    "type": "command",
+                    "bash": format!("bash {quoted_hook_path} working")
+                }
+            ],
+            "postToolUseFailure": [
+                {
+                    "type": "command",
+                    "bash": format!("bash {quoted_hook_path} working")
+                }
+            ],
+            "agentStop": [
+                {
+                    "type": "command",
+                    "bash": format!("bash {quoted_hook_path} idle")
+                }
+            ],
+            "notification": [
+                {
+                    "type": "command",
+                    "bash": format!("bash {quoted_hook_path} notification")
+                }
+            ]
+        }
+    });
+
+    fs::write(&json_path, serde_json::to_string_pretty(&config)?)?;
+
+    Ok(CopilotInstallPaths {
+        hook_path,
+        json_path,
+    })
+}
+
 pub(crate) fn uninstall_pi() -> io::Result<PiUninstallResult> {
     let extension_path = pi_extension_dir()?.join(PI_EXTENSION_INSTALL_NAME);
     let removed_extension = remove_file_if_exists(&extension_path)?;
@@ -958,6 +1092,22 @@ pub(crate) fn uninstall_hermes() -> io::Result<HermesUninstallResult> {
         config_path,
         removed_plugin_dir,
         updated_config,
+    })
+}
+
+pub(crate) fn uninstall_copilot() -> io::Result<CopilotUninstallResult> {
+    let copilot_dir = copilot_dir()?;
+    let hook_path = copilot_dir.join("hooks").join(COPILOT_HOOK_INSTALL_NAME);
+    let json_path = copilot_dir.join("hooks").join(COPILOT_JSON_INSTALL_NAME);
+
+    let removed_hook_file = remove_file_if_exists(&hook_path)?;
+    let removed_json_file = remove_file_if_exists(&json_path)?;
+
+    Ok(CopilotUninstallResult {
+        hook_path,
+        json_path,
+        removed_hook_file,
+        removed_json_file,
     })
 }
 
@@ -1412,6 +1562,10 @@ fn hermes_plugin_dir() -> io::Result<PathBuf> {
         .join(HERMES_PLUGIN_INSTALL_NAME))
 }
 
+fn copilot_dir() -> io::Result<PathBuf> {
+    config_dir_from_env_or_home(COPILOT_HOME_ENV_VAR, &[".copilot"])
+}
+
 fn home_dir() -> io::Result<PathBuf> {
     std::env::var("HOME")
         .map(PathBuf::from)
@@ -1432,6 +1586,7 @@ mod tests {
         std::env::remove_var(PI_CODING_AGENT_DIR_ENV_VAR);
         std::env::remove_var(CLAUDE_CONFIG_DIR_ENV_VAR);
         std::env::remove_var(CODEX_HOME_ENV_VAR);
+        std::env::remove_var(COPILOT_HOME_ENV_VAR);
     }
 
     fn unique_base() -> PathBuf {
@@ -2344,6 +2499,137 @@ mod tests {
         let err = install_hermes().unwrap_err().to_string();
 
         assert!(err.contains("hermes config directory not found"));
+
+        std::env::remove_var("HOME");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn install_copilot_writes_hook_and_config() {
+        let _lock = integration_env_lock();
+        let base = unique_base();
+        let home = base.join("home");
+        let copilot_dir = home.join(".copilot");
+        fs::create_dir_all(&copilot_dir).unwrap();
+        std::env::set_var("HOME", &home);
+
+        let installed = install_copilot().unwrap();
+        let hook_content = fs::read_to_string(&installed.hook_path).unwrap();
+        let json_config: Value =
+            serde_json::from_str(&fs::read_to_string(&installed.json_path).unwrap()).unwrap();
+
+        assert_eq!(
+            installed.hook_path,
+            copilot_dir.join("hooks").join(COPILOT_HOOK_INSTALL_NAME)
+        );
+        assert_eq!(
+            installed.json_path,
+            copilot_dir.join("hooks").join(COPILOT_JSON_INSTALL_NAME)
+        );
+        assert_eq!(hook_content, COPILOT_HOOK_ASSET);
+
+        let quoted_hook_path = shell_single_quote(&installed.hook_path.display().to_string());
+        assert_eq!(json_config["version"], 1);
+        assert_eq!(
+            json_config["hooks"]["userPromptSubmitted"][0]["bash"]
+                .as_str()
+                .unwrap(),
+            format!("bash {quoted_hook_path} working")
+        );
+        assert_eq!(
+            json_config["hooks"]["preToolUse"][0]["bash"]
+                .as_str()
+                .unwrap(),
+            format!("bash {quoted_hook_path} pre_tool_use")
+        );
+        assert_eq!(
+            json_config["hooks"]["postToolUse"][0]["bash"]
+                .as_str()
+                .unwrap(),
+            format!("bash {quoted_hook_path} working")
+        );
+        assert_eq!(
+            json_config["hooks"]["postToolUseFailure"][0]["bash"]
+                .as_str()
+                .unwrap(),
+            format!("bash {quoted_hook_path} working")
+        );
+        assert_eq!(
+            json_config["hooks"]["agentStop"][0]["bash"]
+                .as_str()
+                .unwrap(),
+            format!("bash {quoted_hook_path} idle")
+        );
+        assert_eq!(
+            json_config["hooks"]["notification"][0]["bash"]
+                .as_str()
+                .unwrap(),
+            format!("bash {quoted_hook_path} notification")
+        );
+
+        std::env::remove_var("HOME");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn install_copilot_uses_copilot_home_env() {
+        let _lock = integration_env_lock();
+        let base = unique_base();
+        let copilot_dir = base.join("custom-copilot");
+        fs::create_dir_all(&copilot_dir).unwrap();
+        std::env::set_var(COPILOT_HOME_ENV_VAR, &copilot_dir);
+
+        let installed = install_copilot().unwrap();
+
+        assert_eq!(
+            installed.hook_path,
+            copilot_dir.join("hooks").join(COPILOT_HOOK_INSTALL_NAME)
+        );
+        assert_eq!(
+            installed.json_path,
+            copilot_dir.join("hooks").join(COPILOT_JSON_INSTALL_NAME)
+        );
+
+        clear_integration_path_env();
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn uninstall_copilot_removes_hook_and_config() {
+        let _lock = integration_env_lock();
+        let base = unique_base();
+        let home = base.join("home");
+        let copilot_dir = home.join(".copilot");
+        let hooks_dir = copilot_dir.join("hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+        let hook_path = hooks_dir.join(COPILOT_HOOK_INSTALL_NAME);
+        let json_path = hooks_dir.join(COPILOT_JSON_INSTALL_NAME);
+        fs::write(&hook_path, COPILOT_HOOK_ASSET).unwrap();
+        fs::write(&json_path, "{}").unwrap();
+        std::env::set_var("HOME", &home);
+
+        let result = uninstall_copilot().unwrap();
+
+        assert!(result.removed_hook_file);
+        assert!(result.removed_json_file);
+        assert!(!hook_path.exists());
+        assert!(!json_path.exists());
+
+        std::env::remove_var("HOME");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn install_copilot_errors_when_copilot_dir_missing() {
+        let _lock = integration_env_lock();
+        let base = unique_base();
+        let home = base.join("home");
+        fs::create_dir_all(&home).unwrap();
+        std::env::set_var("HOME", &home);
+
+        let err = install_copilot().unwrap_err().to_string();
+
+        assert!(err.contains("copilot directory not found"));
 
         std::env::remove_var("HOME");
         let _ = fs::remove_dir_all(base);
